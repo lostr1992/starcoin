@@ -28,6 +28,7 @@
 //! >       for example connecting to some nodes in priority should be added outside of this
 //! >       module, rather than inside.
 
+use crate::BANNED_THRESHOLD;
 use libp2p::PeerId;
 use log::error;
 use std::{
@@ -607,11 +608,10 @@ impl<'a> NotConnectedPeer<'a> {
             peer.sets[self.set] = MembershipState::NotMember;
 
             // Remove the peer from `self.state.nodes` entirely if it isn't a member of any set.
-            if peer.reputation == 0
-                && peer
-                    .sets
-                    .iter()
-                    .all(|set| matches!(set, MembershipState::NotMember))
+            if peer
+                .sets
+                .iter()
+                .all(|set| matches!(set, MembershipState::NotMember))
             {
                 self.state.nodes.remove(&*self.peer_id);
             }
@@ -692,7 +692,7 @@ impl<'a> Reputation<'a> {
 impl<'a> Drop for Reputation<'a> {
     fn drop(&mut self) {
         if let Some(node) = self.node.take() {
-            if node.get().reputation == 0
+            if node.get().reputation < BANNED_THRESHOLD
                 && node
                     .get()
                     .sets

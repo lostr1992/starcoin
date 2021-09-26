@@ -52,12 +52,12 @@ use futures::channel::oneshot::{Receiver, Sender};
 pub use libp2p::PeerId;
 
 /// We don't accept nodes whose reputation is under this value.
-const BANNED_THRESHOLD: i32 = 82 * (i32::min_value() / 100);
+pub const BANNED_THRESHOLD: i32 = 82 * (i32::min_value() / 100);
 /// Reputation change for a node when we get disconnected from it.
 const DISCONNECT_REPUTATION_CHANGE: i32 = -256;
 /// Amount of time between the moment we disconnect from a node and the moment we remove it from
 /// the list.
-const FORGET_AFTER: Duration = Duration::from_secs(3600);
+const FORGET_AFTER: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 enum Action {
@@ -494,7 +494,6 @@ impl Peerset {
             self.latest_time_update = now;
             elapsed_now.as_secs() - elapsed_latest.as_secs()
         };
-
         // For each elapsed second, move the node reputation towards zero.
         // If we multiply each second the reputation by `k` (where `k` is between 0 and 1), it
         // takes `ln(0.5) / ln(k)` seconds to reduce the reputation by half. Use this formula to
@@ -519,13 +518,10 @@ impl Peerset {
                 let after = reput_tick(before);
                 trace!(target: "peerset", "Fleeting {}: {} -> {}", peer_id, before, after);
                 peer_reputation.set_reputation(after);
-
-                if after != 0 {
+                if after > BANNED_THRESHOLD {
                     continue;
                 }
-
                 drop(peer_reputation);
-
                 // If the peer reaches a reputation of 0, and there is no connection to it,
                 // forget it.
                 for set_index in 0..self.data.num_sets() {
@@ -632,7 +628,7 @@ impl Peerset {
             peersstate::Peer::Unknown(entry) => entry.discover(),
         };
 
-        if not_connected.reputation() < BANNED_THRESHOLD {
+        if not_connected.reputation() <= BANNED_THRESHOLD {
             self.message_queue.push_back(Message::Reject(index));
             return;
         }
@@ -791,6 +787,7 @@ mod tests {
     };
     use futures::prelude::*;
     use libp2p::PeerId;
+    use starcoin_logger::LogPattern;
     use std::{pin::Pin, task::Poll, thread, time::Duration};
 
     fn assert_messages(mut peerset: Peerset, messages: Vec<Message>) -> Peerset {
@@ -939,6 +936,7 @@ mod tests {
 
     #[test]
     fn test_peerset_banned() {
+        starcoin_logger::init_with_default_level("trace", Some(LogPattern::WithLine));
         let (mut peerset, handle) = Peerset::from_config(PeersetConfig {
             sets: vec![SetConfig {
                 in_peers: 25,
@@ -964,12 +962,11 @@ mod tests {
             } else {
                 panic!()
             }
-
             // Wait a bit for the node's reputation to go above the threshold.
             thread::sleep(Duration::from_millis(1500));
-
             // Try again. This time the node should be accepted.
             peerset.incoming(SetId::from(0), peer_id, IncomingIndex(2));
+
             while let Poll::Ready(msg) = Stream::poll_next(Pin::new(&mut peerset), cx) {
                 assert_eq!(msg.unwrap(), Message::Accept(IncomingIndex(2)));
             }
